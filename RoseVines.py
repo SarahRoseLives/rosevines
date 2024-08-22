@@ -2,7 +2,6 @@ import socket
 import threading
 import json
 import time
-from kivy.logger import Logger
 
 def get_broadcast_address():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -25,7 +24,7 @@ class ChatClient:
 
     def log(self, message):
         if self.logging_enabled:
-            Logger.info(message)
+            print(message)
 
     def broadcast_discovery(self):
         broadcast_address = get_broadcast_address()
