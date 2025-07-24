@@ -35,11 +35,6 @@ type mdnsMsg struct {
 	message string
 }
 
-type bootstrapMsg struct {
-	user    string
-	message string
-}
-
 type Mode int
 
 const (
@@ -54,7 +49,6 @@ const (
 	ConnMDNS
 	ConnDirect
 	ConnDHT
-	ConnBootstrap
 )
 
 var whiteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
@@ -81,8 +75,6 @@ type model struct {
 	infoMessages     []string
 	mdns             *modes.MDNSMode
 	direct           *modes.DirectMode
-	bootstrap        *modes.BootstrapMode
-	bootstrapPeers   []modes.Peer
 	networkMsgs      chan tea.Msg
 }
 
@@ -120,7 +112,8 @@ func initialModel() model {
 			"  /mode mdns                                      - LAN chat (auto-discover peers)",
 			"  /mode direct server [port]                      - Direct mode, listen for peer (optional port, default 9312)",
 			"  /mode direct client <ip>[:port]                 - Direct mode, connect to peer (port optional, default 9312)",
-			"  /mode bootstrap <host:port>                     - Use bootstrap server for peer discovery",
+			// Bootstrap removed from commands UI
+			// "  /mode bootstrap <host:port>                     - Use bootstrap server for peer discovery",
 			"  /mode dht                                       - (future) Distributed Hash Table",
 			"  /quit                                           - Exit",
 			"",
@@ -131,7 +124,6 @@ func initialModel() model {
 		},
 		mdns:        nil,
 		direct:      nil,
-		bootstrap:   nil,
 		networkMsgs: make(chan tea.Msg, 32),
 	}
 }
@@ -147,13 +139,6 @@ func (m *model) shutdownDirect() {
 	if m.direct != nil {
 		m.direct.Shutdown()
 		m.direct = nil
-	}
-}
-
-func (m *model) shutdownBootstrap() {
-	if m.bootstrap != nil {
-		m.bootstrap.Shutdown()
-		m.bootstrap = nil
 	}
 }
 
@@ -206,27 +191,6 @@ func (m *model) startDirect(addr string, port int, directMode string) {
 	m.connected = direct.Connected()
 }
 
-func (m *model) startBootstrap(serverAddr string) {
-	m.shutdownBootstrap()
-	bootstrap := modes.NewBootstrapMode(m.username, serverAddr)
-	bootstrap.ListenPort = m.connPort // Pass chosen port
-	bootstrap.OnPeerListReceived = func(peers []modes.Peer) {
-		m.bootstrapPeers = peers
-		m.userCount = len(peers)
-		m.connected = len(peers) > 1
-	}
-	bootstrap.OnMessageReceived = func(user, message string) {
-		m.networkMsgs <- bootstrapMsg{user: user, message: message}
-	}
-	bootstrap.Start()
-	m.bootstrap = bootstrap
-	m.connected = false
-	m.networkMsgs <- bootstrapMsg{
-		user:    "SYSTEM",
-		message: "Connected to bootstrap server. Polling for peers...",
-	}
-}
-
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
@@ -269,14 +233,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.scroll = len(m.messages)
 		return m, m.listenNetworkMsgs()
-	case bootstrapMsg:
-		m.messages = append(m.messages, chatMsg{
-			timestamp: time.Now(),
-			user:      msg.user,
-			message:   msg.message,
-		})
-		m.scroll = len(m.messages)
-		return m, m.listenNetworkMsgs()
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyEnter:
@@ -290,7 +246,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.username = nick
 						m.configuredNick = true
 						m.infoMessages = append(m.infoMessages, fmt.Sprintf("Nickname set to %s", nick))
-						m.textInput.Placeholder = "Type /mode <mdns|direct|bootstrap|dht> to set mode"
+						m.textInput.Placeholder = "Type /mode <mdns|direct|dht> to set mode"
 					} else {
 						m.infoMessages = append(m.infoMessages, "Nickname cannot be empty.")
 					}
@@ -350,27 +306,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.infoMessages = append(m.infoMessages, "Direct mode: first argument must be 'server' or 'client'.")
 						}
 					case strings.HasPrefix(modeArg, "bootstrap"):
-						addr := strings.TrimSpace(strings.TrimPrefix(modeArg, "bootstrap"))
-						if addr == "" {
-							m.infoMessages = append(m.infoMessages, "Bootstrap mode requires a server address: /mode bootstrap <host:port>")
-						} else {
-							m.connectionMode = ConnBootstrap
-							m.connAddr = addr
-							m.configuredMode = true
-							m.infoMessages = append(m.infoMessages, fmt.Sprintf("Mode set to Bootstrap. Server: %s", addr))
-						}
+						m.infoMessages = append(m.infoMessages, "Bootstrap mode was removed from this client.")
 					case modeArg == "dht":
 						m.connectionMode = ConnDHT
 						m.configuredMode = true
 						m.infoMessages = append(m.infoMessages, "Mode set to DHT (future feature)")
 					default:
-						m.infoMessages = append(m.infoMessages, "Unknown mode. Use /mode mdns, /mode direct server/client, /mode bootstrap <host:port>, or /mode dht")
+						m.infoMessages = append(m.infoMessages, "Unknown mode. Use /mode mdns, /mode direct server/client, /mode dht")
 					}
 				} else if input == "/quit" {
 					m.shouldQuit = true
 					m.shutdownMDNS()
 					m.shutdownDirect()
-					m.shutdownBootstrap()
 					return m, tea.Quit
 				} else if input != "" {
 					m.infoMessages = append(m.infoMessages, "Unknown command. See above for available commands.")
@@ -390,8 +337,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.startMDNS()
 					case ConnDirect:
 						m.startDirect(m.connAddr, m.connPort, m.connDirectMode)
-					case ConnBootstrap:
-						m.startBootstrap(m.connAddr)
 					}
 				}
 			} else if m.configMode == ModeChat {
@@ -399,7 +344,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.shouldQuit = true
 					m.shutdownMDNS()
 					m.shutdownDirect()
-					m.shutdownBootstrap()
 					return m, tea.Quit
 				} else if strings.HasPrefix(input, "/nick ") {
 					nick := strings.TrimSpace(strings.TrimPrefix(input, "/nick"))
@@ -426,10 +370,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case ConnMDNS:
 						if m.mdns != nil {
 							m.mdns.Broadcast(m.username, input)
-						}
-					case ConnBootstrap:
-						if m.bootstrap != nil {
-							m.bootstrap.Broadcast(m.username, input)
 						}
 					}
 				}
@@ -474,8 +414,6 @@ func (m model) modeName() string {
 			return "Direct (" + m.connDirectMode + ")"
 		}
 		return "Direct"
-	case ConnBootstrap:
-		return "Bootstrap"
 	case ConnDHT:
 		return "DHT"
 	default:
@@ -526,12 +464,6 @@ func (m model) View() string {
 			connectionStatus = "Waiting for Peer..."
 		} else {
 			connectionStatus = "Connecting..."
-		}
-	case ConnBootstrap:
-		if m.connected {
-			connectionStatus = fmt.Sprintf("Peers: %d", m.userCount)
-		} else {
-			connectionStatus = "Polling server..."
 		}
 	default:
 		connectionStatus = "N/A"
